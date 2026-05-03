@@ -16,7 +16,7 @@ install_bin() {
   fi
 }
 
-install_bin kubectl-log .
+install_bin kubectl-log ./cmd/log/
 install_bin kubectl-node ./cmd/node/
 
 echo ""
