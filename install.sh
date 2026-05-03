@@ -18,8 +18,10 @@ install_bin() {
 
 install_bin kubectl-log ./cmd/log/
 install_bin kubectl-node ./cmd/node/
+install_bin kubectl-doctor ./cmd/doctor/
 
 echo ""
 echo "Done."
-echo "  kubectl log   — deployment 로그 뷰어"
-echo "  kubectl node  — 노드 관리 (drain / cordon / uncordon)"
+echo "  kubectl log     — deployment 로그 뷰어"
+echo "  kubectl node    — 노드 관리 (drain / cordon / uncordon)"
+echo "  kubectl doctor  — 클러스터 진단 (OOMKill / pod 실패 / 스케줄 이슈)"

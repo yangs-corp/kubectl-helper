@@ -12,6 +12,7 @@ A collection of interactive TUI kubectl plugins built with [Bubble Tea](https://
 |---------|-------------|
 | `kubectl log` | Interactive log viewer grouped by Deployment |
 | `kubectl node` | Node manager — drain, cordon, SSH, resource usage |
+| `kubectl doctor` | Cluster diagnostics — OOMKills, pod failures, scheduling issues, warning events |
 
 ---
 
@@ -132,6 +133,37 @@ kubectl node <node-name>      # jump directly to node detail
 - **Drain** — runs `kubectl drain --ignore-daemonsets --delete-emptydir-data` with live output streaming
 - **Cordon / Uncordon** — toggle scheduling on a node with confirmation prompt
 - **Node detail** — shows all pods scheduled on the selected node across all namespaces
+
+---
+
+## kubectl doctor
+
+Diagnose cluster health in one view — OOMKills, pod failures, scheduling problems, and recent warning events.
+
+### Usage
+
+```bash
+kubectl doctor           # run diagnostics (auto-refreshes every 30 s)
+```
+
+### Key bindings
+
+| Key | Action |
+|-----|--------|
+| `↑ / ↓ / PgUp / PgDn` | Scroll report |
+| `r` | Force refresh |
+| `q` | Quit |
+
+### Checks performed
+
+| Category | What it detects |
+|----------|-----------------|
+| **Nodes** | NotReady, DiskPressure, MemoryPressure |
+| **Pods** | CrashLoopBackOff, OOMKilled, ImagePullBackOff, Failed, Pending > 5 min |
+| **Events** | Warning events from the last hour, deduplicated by object + reason |
+
+- Results are color-coded: red for critical issues, yellow for warnings, green for healthy
+- Auto-refreshes every 30 seconds; press `r` to refresh on demand
 
 ---
 

@@ -12,6 +12,7 @@
 |--------|------|
 | `kubectl log` | Deployment 단위 인터랙티브 로그 뷰어 |
 | `kubectl node` | 노드 관리 — drain, cordon, SSH, 리소스 사용량 |
+| `kubectl doctor` | 클러스터 진단 — OOMKill, pod 실패, 스케줄 이슈, Warning 이벤트 |
 
 ---
 
@@ -132,6 +133,37 @@ kubectl node <node-name>       # 바로 노드 상세 화면으로 진입
 - **Drain** — `kubectl drain --ignore-daemonsets --delete-emptydir-data` 실행, 진행 로그 실시간 스트리밍
 - **Cordon / Uncordon** — 확인 팝업 후 노드 스케줄링 상태 변경
 - **노드 상세** — 선택한 노드에서 실행 중인 전체 네임스페이스의 Pod 목록 조회
+
+---
+
+## kubectl doctor
+
+클러스터 전반의 이상 징후를 한 화면에서 진단합니다 — OOMKill, Pod 실패, 스케줄링 문제, Warning 이벤트.
+
+### 사용법
+
+```bash
+kubectl doctor           # 진단 실행 (30초마다 자동 갱신)
+```
+
+### 키 바인딩
+
+| 키 | 동작 |
+|----|------|
+| `↑ / ↓ / PgUp / PgDn` | 리포트 스크롤 |
+| `r` | 강제 갱신 |
+| `q` | 종료 |
+
+### 진단 항목
+
+| 카테고리 | 감지 내용 |
+|----------|-----------|
+| **노드** | NotReady, DiskPressure, MemoryPressure |
+| **Pod** | CrashLoopBackOff, OOMKilled, ImagePullBackOff, Failed, Pending > 5분 |
+| **이벤트** | 최근 1시간 Warning 이벤트, 오브젝트+이유 기준 중복 제거 |
+
+- 결과는 색상으로 구분: 빨강(Critical), 노랑(Warning), 초록(정상)
+- 30초마다 자동 갱신; `r`로 즉시 갱신 가능
 
 ---
 
