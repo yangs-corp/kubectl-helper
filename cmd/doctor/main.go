@@ -537,7 +537,7 @@ func runLLM(report clusterReport, mode string) (string, error) {
 	var cmd *exec.Cmd
 	switch mode {
 	case "claude":
-		cmd = exec.Command("claude", "-p", "--bare", prompt)
+		cmd = exec.Command("claude", "-p", prompt)
 	case "codex":
 		cmd = exec.Command("codex", "exec", prompt)
 	default:
