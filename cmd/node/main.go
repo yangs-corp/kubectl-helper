@@ -957,6 +957,24 @@ func main() {
 
 func parseArgs(args []string) string {
 	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			fmt.Print(`Usage: kubectl node [NODE]
+
+Interactive node manager — drain, cordon, SSH, resource usage.
+Polls CPU/memory every 10 seconds via kubectl top nodes.
+
+Options:
+  -h, --help   Show this help
+
+Keys (node list):
+  ↑/↓ navigate · / search · enter/s SSH · i detail
+  d drain · c cordon · u uncordon · r refresh · q quit
+
+Keys (node detail):
+  ↑/↓ pods · s SSH · d/c/u drain/cordon/uncordon · r refresh · b back
+`)
+			os.Exit(0)
+		}
 		if !strings.HasPrefix(arg, "-") {
 			return arg
 		}

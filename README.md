@@ -13,6 +13,8 @@ A collection of interactive TUI kubectl plugins built with [Bubble Tea](https://
 | `kubectl log` | Interactive log viewer grouped by Deployment |
 | `kubectl node` | Node manager — drain, cordon, SSH, resource usage |
 | `kubectl doctor` | Cluster diagnostics — OOMKills, pod failures, scheduling issues, warning events |
+| `kubectl event` | Real-time event viewer across all namespaces |
+| `kubectl pf` | Port-forward manager — start and kill forwards interactively |
 
 ---
 
@@ -164,6 +166,77 @@ kubectl doctor           # run diagnostics (auto-refreshes every 30 s)
 
 - Results are color-coded: red for critical issues, yellow for warnings, green for healthy
 - Auto-refreshes every 30 seconds; press `r` to refresh on demand
+
+---
+
+## kubectl event
+
+Real-time Kubernetes event viewer across all namespaces with filtering and Warning-only mode.
+
+### Usage
+
+```bash
+kubectl event                    # all namespaces
+kubectl event -n <namespace>     # filter by namespace
+```
+
+### Key bindings
+
+| Key | Action |
+|-----|--------|
+| `↑ / ↓` | Navigate |
+| `/` | Search / filter |
+| `w` | Toggle Warning-only mode |
+| `Esc` | Clear filter |
+| `r` | Force refresh |
+| `q` | Quit |
+
+### Features
+
+- Auto-refreshes every 10 seconds
+- Color-coded: Warning → orange, Normal → gray
+- MESSAGE column fills remaining terminal width dynamically
+
+---
+
+## kubectl pf
+
+Interactive port-forward manager. Browse all services and manage active forwards.
+
+### Usage
+
+```bash
+kubectl pf
+```
+
+### Key bindings
+
+**Services view**
+
+| Key | Action |
+|-----|--------|
+| `↑ / ↓` | Navigate |
+| `/` | Search by name or namespace |
+| `Enter` | Start port-forward (opens port input) |
+| `Tab` | Switch to active forwards |
+| `q` | Quit |
+
+**Port input**
+
+| Key | Action |
+|-----|--------|
+| Type | `8080` (auto-maps to first port) or `8080:80` |
+| `Enter` | Start forward |
+| `Esc` | Cancel |
+
+**Active forwards**
+
+| Key | Action |
+|-----|--------|
+| `↑ / ↓` | Navigate |
+| `d` | Kill selected forward |
+| `Tab` | Switch back to services |
+| `q` | Quit (kills all active forwards) |
 
 ---
 

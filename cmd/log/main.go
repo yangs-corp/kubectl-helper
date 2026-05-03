@@ -134,6 +134,7 @@ const (
 type podsReadyMsg struct{ pods []string }
 type logEntryMsg struct{ entry logEntry }
 type errMsg struct{ err error }
+type exportDoneMsg struct{ filename string }
 
 // ─── model ────────────────────────────────────────────────────────────────────
 
@@ -165,9 +166,10 @@ type model struct {
 	// pod picker
 	podCursor int
 
-	width   int
-	height  int
-	errText string
+	width         int
+	height        int
+	errText       string
+	exportNotice  string
 }
 
 func buildTableRows(deps []deployment) []table.Row {
@@ -283,6 +285,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForLog(m.logCh)
 
+	case exportDoneMsg:
+		m.exportNotice = "saved → " + msg.filename
+
 	case errMsg:
 		m.errText = msg.err.Error()
 	}
@@ -368,6 +373,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// ── log view ──────────────────────────────────────────────────────────────
 	case stateLogs:
+		m.exportNotice = ""
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.stopLogs()
@@ -411,6 +417,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.hlInput.SetValue("")
 			m.hlInput.Focus()
 			return m, textinput.Blink
+		case "e":
+			return m, exportLogs(m.logEntries, m.selected, m.filterMd, m.filterText, m.activePods)
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -587,7 +595,11 @@ func (m model) logView() string {
 	case stateHighlightInput:
 		help = helpStyle.Render("enter add/remove · esc cancel")
 	default:
-		help = helpStyle.Render("/ include  ! exclude  0 clear  p pods  h highlight  ↑/↓ scroll  b back  q quit")
+		if m.exportNotice != "" {
+			help = helpStyle.Render(m.exportNotice)
+		} else {
+			help = helpStyle.Render("/ include  ! exclude  0 clear  p pods  h highlight  e export  ↑/↓ scroll  b back  q quit")
+		}
 	}
 
 	body := m.viewport.View()
@@ -804,6 +816,36 @@ func streamPodLogs(ctx context.Context, ns, pod, prefix string, ch chan<- logEnt
 	cmd.Wait()
 }
 
+func exportLogs(entries []logEntry, deploy deployment, fm filterMode, filterText string, activePods map[string]bool) tea.Cmd {
+	return func() tea.Msg {
+		filename := fmt.Sprintf("kubectl-log-%s-%s.log", deploy.name, time.Now().Format("20060102-150405"))
+		f, err := os.Create(filename)
+		if err != nil {
+			return errMsg{err}
+		}
+		defer f.Close()
+		count := 0
+		for _, e := range entries {
+			if len(activePods) > 0 && !activePods[e.pod] {
+				continue
+			}
+			switch fm {
+			case filterInclude:
+				if filterText != "" && !strings.Contains(e.raw, filterText) {
+					continue
+				}
+			case filterExclude:
+				if filterText != "" && strings.Contains(e.raw, filterText) {
+					continue
+				}
+			}
+			fmt.Fprintf(f, "[%s] %s\n", e.pod, e.raw)
+			count++
+		}
+		return exportDoneMsg{filename: fmt.Sprintf("%s (%d lines)", filename, count)}
+	}
+}
+
 func waitForLog(ch chan logEntry) tea.Cmd {
 	if ch == nil {
 		return nil
@@ -891,6 +933,23 @@ func parseArgs(args []string) (namespace, deployName string) {
 			continue
 		}
 		switch {
+		case arg == "--help" || arg == "-h":
+			fmt.Print(`Usage: kubectl log [OPTIONS] [DEPLOYMENT]
+
+Interactive log viewer for Kubernetes deployments.
+
+Options:
+  -n, --namespace <namespace>   Filter by namespace (default: all)
+  -h, --help                    Show this help
+
+Keys (deployment list):
+  ↑/↓ navigate · / search · enter select · q quit
+
+Keys (log view):
+  ↑/↓/PgUp/PgDn scroll · / include · ! exclude · 0 clear
+  p pod selector · h highlight · e export to file · b back · q quit
+`)
+			os.Exit(0)
 		case (arg == "-n" || arg == "--namespace") && i+1 < len(args):
 			namespace = args[i+1]
 			skip = true

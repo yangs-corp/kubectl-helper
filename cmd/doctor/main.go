@@ -383,7 +383,11 @@ func (m model) renderLLMSection() string {
 	case llmAnalyzing:
 		sb.WriteString(dimStyle.Render("  Analyzing...") + "\n")
 	case llmDone:
-		for _, line := range strings.Split(m.llmText, "\n") {
+		wrapWidth := m.width - 4
+		if wrapWidth < 20 {
+			wrapWidth = 20
+		}
+		for _, line := range strings.Split(wrapText(m.llmText, wrapWidth), "\n") {
 			sb.WriteString("  " + llmStyle.Render(line) + "\n")
 		}
 	case llmFailed:
@@ -848,6 +852,38 @@ func humanAge(t time.Time) string {
 	}
 }
 
+func wrapText(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	var out strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		runes := []rune(line)
+		if len(runes) <= width {
+			out.WriteString(line)
+			out.WriteByte('\n')
+			continue
+		}
+		for len(runes) > width {
+			cut := width
+			for i := width - 1; i > 0; i-- {
+				if runes[i] == ' ' {
+					cut = i + 1
+					break
+				}
+			}
+			out.WriteString(string(runes[:cut]))
+			out.WriteByte('\n')
+			runes = runes[cut:]
+		}
+		if len(runes) > 0 {
+			out.WriteString(string(runes))
+			out.WriteByte('\n')
+		}
+	}
+	return strings.TrimSuffix(out.String(), "\n")
+}
+
 func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
@@ -868,6 +904,23 @@ func main() {
 	llmMode := ""
 	for _, arg := range os.Args[1:] {
 		switch arg {
+		case "--help", "-h":
+			fmt.Print(`Usage: kubectl doctor [OPTIONS]
+
+Cluster diagnostics — OOMKills, pod failures, scheduling issues, warning events.
+Auto-refreshes every 30 seconds.
+
+Options:
+  --claude     Analyze report with Claude CLI after fetching
+  --codex      Analyze report with Codex CLI after fetching
+  -h, --help   Show this help
+
+Keys:
+  ↑/↓/PgUp/PgDn  scroll
+  r               force refresh
+  q               quit
+`)
+			os.Exit(0)
 		case "--claude":
 			llmMode = "claude"
 		case "--codex":

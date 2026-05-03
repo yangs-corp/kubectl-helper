@@ -1,4 +1,9 @@
 kubectl-log
 kubectl-node
 kubectl-doctor
+kubectl-event
+kubectl-pf
+log
+event
+pf
 .omc/
