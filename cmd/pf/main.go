@@ -119,6 +119,7 @@ const (
 
 type servicesMsg struct{ services []k8sService }
 type forwardStartedMsg struct{ fwd *portForward }
+type fwdRefreshMsg struct{}
 type errMsg struct{ err error }
 
 // ─── model ────────────────────────────────────────────────────────────────────
@@ -222,7 +223,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.svcTable.SetColumns(svcCols(svcNameWidth(m.width)))
-		m.svcTable.SetHeight(m.height - 3)
+		m.svcTable.SetHeight(m.height - 4) // title + search + fwdbar + help
 		m.fwdTable.SetHeight(m.height - 3)
 
 	case tea.KeyMsg:
@@ -236,6 +237,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.forwards = append(m.forwards, msg.fwd)
 		m.fwdTable.SetRows(buildFwdRows(m.forwards))
 		m.state = stateServices
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return fwdRefreshMsg{} })
+
+	case fwdRefreshMsg:
+		m.fwdTable.SetRows(buildFwdRows(m.forwards))
+		// keep ticking as long as there are active forwards
+		for _, f := range m.forwards {
+			if f.running {
+				return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return fwdRefreshMsg{} })
+			}
+		}
 
 	case errMsg:
 		m.err = msg.err.Error()
@@ -397,7 +408,13 @@ func (m model) View() string {
 }
 
 func (m model) servicesView() string {
-	title := titleStyle.Render(fmt.Sprintf("Services  [%d]", len(m.allServices)))
+	active := m.runningCount()
+	titleText := fmt.Sprintf("Services  [%d]", len(m.allServices))
+	if active > 0 {
+		titleText += "  " + runningStyle.Render(fmt.Sprintf("● %d forwarding", active))
+	}
+	title := titleStyle.Render(titleText)
+
 	var searchBar string
 	if m.state == stateServiceSearch {
 		searchBar = " " + m.svcSearch.View()
@@ -406,8 +423,35 @@ func (m model) servicesView() string {
 	} else {
 		searchBar = dimStyle.Render(" / to search")
 	}
+
 	help := helpStyle.Render("/ search · enter start forward · tab forwards · q quit")
-	return title + "\n" + searchBar + "\n" + m.svcTable.View() + "\n" + help
+	return title + "\n" + searchBar + "\n" + m.forwardsBar() + "\n" + m.svcTable.View() + "\n" + help
+}
+
+func (m model) forwardsBar() string {
+	var parts []string
+	for _, f := range m.forwards {
+		if f.running {
+			parts = append(parts, runningStyle.Render("●")+
+				lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(
+					fmt.Sprintf(" %s  localhost:%s → %s", f.service, f.localPort, f.remPort),
+				))
+		}
+	}
+	if len(parts) == 0 {
+		return dimStyle.Render(" no active forwards")
+	}
+	return " " + strings.Join(parts, dimStyle.Render("  │  "))
+}
+
+func (m model) runningCount() int {
+	n := 0
+	for _, f := range m.forwards {
+		if f.running {
+			n++
+		}
+	}
+	return n
 }
 
 func (m model) portInputView() string {

@@ -3,7 +3,7 @@ kubectl-node
 kubectl-doctor
 kubectl-event
 kubectl-pf
-log
-event
-pf
+/log
+/event
+/pf
 .omc/
