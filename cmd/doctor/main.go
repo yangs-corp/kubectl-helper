@@ -24,6 +24,7 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	boldStyle     = lipgloss.NewStyle().Bold(true)
 	helpStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).PaddingLeft(1)
+	llmStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
 
 	sectionStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -184,7 +185,7 @@ type clusterReport struct {
 	updatedAt    time.Time
 }
 
-// ─── app state ────────────────────────────────────────────────────────────────
+// ─── app / llm state ──────────────────────────────────────────────────────────
 
 type appState int
 
@@ -194,31 +195,49 @@ const (
 	stateError
 )
 
+type llmState int
+
+const (
+	llmIdle llmState = iota
+	llmAnalyzing
+	llmDone
+	llmFailed
+)
+
 // ─── messages ─────────────────────────────────────────────────────────────────
 
 type reportMsg struct{ report clusterReport }
 type tickMsg time.Time
 type errMsg struct{ err error }
+type llmMsg struct{ text string }
+type llmErrMsg struct{ err error }
 
 // ─── model ────────────────────────────────────────────────────────────────────
 
 type model struct {
-	state    appState
-	report   clusterReport
-	viewport viewport.Model
-	spinner  spinner.Model
-	width    int
-	height   int
-	err      string
+	state      appState
+	report     clusterReport
+	viewport   viewport.Model
+	spinner    spinner.Model
+	width      int
+	height     int
+	err        string
+	llmMode    string // "claude" | "codex" | ""
+	llmState   llmState
+	llmText    string
+	llmErr     string
+	pendingLLM bool
 }
 
-func newModel() model {
+func newModel(llmMode string) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	return model{
-		state:   stateLoading,
-		spinner: sp,
+		state:      stateLoading,
+		spinner:    sp,
+		llmMode:    llmMode,
+		pendingLLM: llmMode != "",
 	}
 }
 
@@ -248,6 +267,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "r":
 			m.state = stateLoading
+			m.llmState = llmIdle
+			m.llmText = ""
+			m.llmErr = ""
+			m.pendingLLM = m.llmMode != ""
 			return m, tea.Batch(m.spinner.Tick, fetchReport())
 		}
 		var cmd tea.Cmd
@@ -269,6 +292,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.report = msg.report
 		m.state = stateReport
 		m.viewport = viewport.New(m.width, m.height-3)
+		var cmd tea.Cmd
+		if m.pendingLLM {
+			m.llmState = llmAnalyzing
+			m.pendingLLM = false
+			cmd = fetchLLMAnalysis(m.report, m.llmMode)
+		}
+		m.viewport.SetContent(m.renderReport())
+		return m, cmd
+
+	case llmMsg:
+		m.llmState = llmDone
+		m.llmText = msg.text
+		m.viewport.SetContent(m.renderReport())
+		m.viewport.GotoBottom()
+
+	case llmErrMsg:
+		m.llmState = llmFailed
+		m.llmErr = msg.err.Error()
 		m.viewport.SetContent(m.renderReport())
 
 	case errMsg:
@@ -302,8 +343,21 @@ func (m model) renderHeader() string {
 	pc := len(m.report.podProblems)
 	ec := len(m.report.events)
 	counts := dimStyle.Render(fmt.Sprintf("nodes:%d  pods:%d  events:%d", nc, pc, ec))
+
+	llmStatus := ""
+	if m.llmMode != "" {
+		switch m.llmState {
+		case llmAnalyzing:
+			llmStatus = "  " + m.spinner.View() + dimStyle.Render(" AI analyzing...")
+		case llmDone:
+			llmStatus = "  " + llmStyle.Render("AI ✓")
+		case llmFailed:
+			llmStatus = "  " + criticalStyle.Render("AI ✗")
+		}
+	}
+
 	return headerStyle.Render(
-		boldStyle.Render("Cluster Doctor") + "  " + overall.badge() + "  " + counts + "  " + ts,
+		boldStyle.Render("Cluster Doctor") + "  " + overall.badge() + "  " + counts + "  " + ts + llmStatus,
 	)
 }
 
@@ -314,6 +368,27 @@ func (m model) renderReport() string {
 	sb.WriteString(m.renderPods())
 	sb.WriteString("\n")
 	sb.WriteString(m.renderEvents())
+	if m.llmMode != "" {
+		sb.WriteString("\n")
+		sb.WriteString(m.renderLLMSection())
+	}
+	return sb.String()
+}
+
+func (m model) renderLLMSection() string {
+	var sb strings.Builder
+	label := strings.ToUpper(m.llmMode)
+	sb.WriteString(sectionStyle.Render(fmt.Sprintf("AI Analysis (%s)", label)) + "\n")
+	switch m.llmState {
+	case llmAnalyzing:
+		sb.WriteString(dimStyle.Render("  Analyzing...") + "\n")
+	case llmDone:
+		for _, line := range strings.Split(m.llmText, "\n") {
+			sb.WriteString("  " + llmStyle.Render(line) + "\n")
+		}
+	case llmFailed:
+		sb.WriteString(criticalStyle.Render("  Error: ") + m.llmErr + "\n")
+	}
 	return sb.String()
 }
 
@@ -445,6 +520,94 @@ func renderColHeader(widths []int, titles ...string) string {
 	return sb.String()
 }
 
+// ─── LLM ─────────────────────────────────────────────────────────────────────
+
+func fetchLLMAnalysis(report clusterReport, mode string) tea.Cmd {
+	return func() tea.Msg {
+		text, err := runLLM(report, mode)
+		if err != nil {
+			return llmErrMsg{err}
+		}
+		return llmMsg{text}
+	}
+}
+
+func runLLM(report clusterReport, mode string) (string, error) {
+	prompt := buildPrompt(report)
+	var cmd *exec.Cmd
+	switch mode {
+	case "claude":
+		cmd = exec.Command("claude", "-p", "--bare", prompt)
+	case "codex":
+		cmd = exec.Command("codex", "exec", prompt)
+	default:
+		return "", fmt.Errorf("unknown LLM mode: %s", mode)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func buildPrompt(r clusterReport) string {
+	var sb strings.Builder
+	sb.WriteString("You are a Kubernetes SRE. Analyze the following cluster diagnostic report and provide:\n")
+	sb.WriteString("1. A brief summary of the most critical issues\n")
+	sb.WriteString("2. Likely root causes\n")
+	sb.WriteString("3. Recommended remediation steps\n\n")
+	sb.WriteString("--- CLUSTER DIAGNOSTIC REPORT ---\n")
+	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", r.updatedAt.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("Overall severity: %s\n\n", severityText(r.overall)))
+
+	sb.WriteString("== NODES ==\n")
+	if len(r.nodeProblems) == 0 {
+		sb.WriteString("All nodes healthy\n")
+	} else {
+		for _, n := range r.nodeProblems {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", n.name, strings.Join(n.conditions, ", ")))
+		}
+	}
+
+	sb.WriteString("\n== PROBLEM PODS ==\n")
+	if len(r.podProblems) == 0 {
+		sb.WriteString("All pods healthy\n")
+	} else {
+		for _, p := range r.podProblems {
+			line := fmt.Sprintf("  %s/%s — %s (restarts: %d, age: %s)", p.namespace, p.name, p.reason, p.restarts, p.age)
+			if p.message != "" {
+				line += "\n    " + p.message
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+
+	sb.WriteString("\n== WARNING EVENTS (last 1h) ==\n")
+	if len(r.events) == 0 {
+		sb.WriteString("No warning events\n")
+	} else {
+		for _, e := range r.events {
+			sb.WriteString(fmt.Sprintf("  [%s] %s — %s: %s (count: %d)\n",
+				e.namespace, e.object, e.reason, e.message, e.count))
+		}
+	}
+	return sb.String()
+}
+
+func severityText(s severity) string {
+	switch s {
+	case severityCritical:
+		return "CRITICAL"
+	case severityWarning:
+		return "WARNING"
+	default:
+		return "OK"
+	}
+}
+
 // ─── data fetching ────────────────────────────────────────────────────────────
 
 func fetchReport() tea.Cmd {
@@ -458,7 +621,6 @@ func fetchReport() tea.Cmd {
 }
 
 func buildReport() (clusterReport, error) {
-	// parallel fetch
 	type result struct {
 		nodes  []byte
 		pods   []byte
@@ -544,13 +706,11 @@ func buildReport() (clusterReport, error) {
 	for _, item := range podList.Items {
 		age := humanAge(item.Metadata.CreationTimestamp)
 
-		// check container statuses
 		for _, cs := range item.Status.ContainerStatuses {
 			reason := cs.State.Waiting.Reason
 			msg := cs.State.Waiting.Message
 			sev := severityWarning
 
-			// last state OOMKilled
 			if cs.LastState.Terminated.Reason == "OOMKilled" && reason == "" {
 				reason = "OOMKilled"
 				msg = cs.LastState.Terminated.Message
@@ -565,7 +725,6 @@ func buildReport() (clusterReport, error) {
 			case "ImagePullBackOff", "ErrImagePull":
 				sev = severityWarning
 			case "":
-				// check terminated
 				if cs.State.Terminated.Reason == "OOMKilled" {
 					reason = "OOMKilled"
 					sev = severityCritical
@@ -586,7 +745,6 @@ func buildReport() (clusterReport, error) {
 			overall = maxSeverity(overall, sev)
 		}
 
-		// check phase
 		switch item.Status.Phase {
 		case "Failed":
 			report.podProblems = append(report.podProblems, podProblem{
@@ -618,10 +776,8 @@ func buildReport() (clusterReport, error) {
 		}
 	}
 
-	// deduplicate pod problems (same pod may appear for multiple containers)
 	report.podProblems = dedupPodProblems(report.podProblems)
 
-	// sort: critical first, then by namespace/name
 	sort.Slice(report.podProblems, func(i, j int) bool {
 		if report.podProblems[i].severity != report.podProblems[j].severity {
 			return report.podProblems[i].severity > report.podProblems[j].severity
@@ -655,7 +811,6 @@ func buildReport() (clusterReport, error) {
 		overall = maxSeverity(overall, severityWarning)
 	}
 
-	// sort events: newest first (age string is not sortable, so keep original order which is newest first from API)
 	report.overall = overall
 	return report, nil
 }
@@ -710,7 +865,17 @@ func truncate(s string, max int) string {
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 func main() {
-	p := tea.NewProgram(newModel(), tea.WithAltScreen())
+	llmMode := ""
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--claude":
+			llmMode = "claude"
+		case "--codex":
+			llmMode = "codex"
+		}
+	}
+
+	p := tea.NewProgram(newModel(llmMode), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
