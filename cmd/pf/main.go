@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -96,12 +99,13 @@ func (s k8sService) firstPort() string {
 // ─── port-forward ─────────────────────────────────────────────────────────────
 
 type portForward struct {
-	service   string
-	namespace string
-	localPort string
-	remPort   string
-	cmd       *exec.Cmd
-	running   bool
+	service    string
+	namespace  string
+	localPort  string
+	remPort    string
+	cmd        *exec.Cmd
+	running    bool
+	stopReason string
 }
 
 // ─── app state ────────────────────────────────────────────────────────────────
@@ -504,7 +508,16 @@ func (m model) portInputView() string {
 func (m model) forwardsView() string {
 	title := titleStyle.Render(fmt.Sprintf("Forwards  [%d]", len(m.forwards)))
 	help := helpStyle.Render("d kill · tab services · q quit")
-	return title + "\n\n" + m.fwdTable.View() + "\n" + help
+
+	var errLine string
+	if idx, ok := m.fwdIndex(); ok {
+		f := m.forwards[idx]
+		if !f.running && f.stopReason != "" {
+			errLine = "\n" + stoppedStyle.Render("  error: ") +
+				dimStyle.Render(truncate(f.stopReason, m.width-10))
+		}
+	}
+	return title + "\n\n" + m.fwdTable.View() + errLine + "\n" + help
 }
 
 // ─── row builders ─────────────────────────────────────────────────────────────
@@ -524,6 +537,8 @@ func buildFwdRows(forwards []*portForward) []table.Row {
 		var status string
 		if f.running {
 			status = runningStyle.Render("running")
+		} else if f.stopReason != "" {
+			status = stoppedStyle.Render("error")
 		} else {
 			status = stoppedStyle.Render("stopped")
 		}
@@ -608,6 +623,20 @@ func parsePortInput(input, firstPort string) (string, string, bool) {
 	return input, remPort, true
 }
 
+func truncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
+}
+
 func humanAge(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -665,20 +694,33 @@ func startForward(svc k8sService, localPort, remotePort string) tea.Cmd {
 			remPort:   remotePort,
 			running:   true,
 		}
+		var stderrBuf bytes.Buffer
 		cmd := exec.Command("kubectl", "port-forward",
 			"-n", svc.namespace,
 			"svc/"+svc.name,
 			localPort+":"+remotePort,
 		)
+		cmd.Stdin = nil
+		cmd.Stdout = io.Discard
+		cmd.Stderr = &stderrBuf
+		// detach from terminal's process group so TUI signals don't kill it
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 		if err := cmd.Start(); err != nil {
 			return errMsg{err}
 		}
 		fwd.cmd = cmd
 
-		// watch for process exit in background; mark stopped when it does
 		go func() {
-			_ = cmd.Wait()
+			err := cmd.Wait()
 			fwd.running = false
+			if err != nil {
+				reason := strings.TrimSpace(stderrBuf.String())
+				if reason == "" {
+					reason = err.Error()
+				}
+				fwd.stopReason = reason
+			}
 		}()
 
 		return forwardStartedMsg{fwd: fwd}
