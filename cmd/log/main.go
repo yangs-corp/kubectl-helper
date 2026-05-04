@@ -771,15 +771,19 @@ func (m model) startStreaming() (model, tea.Cmd) {
 
 func fetchPods(ns, deployment string) tea.Cmd {
 	return func() tea.Msg {
+		selector, err := deploymentSelector(ns, deployment)
+		if err != nil {
+			return errMsg{err}
+		}
 		args := []string{"-n", ns, "get", "pods",
-			"--selector", "app=" + deployment,
+			"--selector", selector,
 			"--field-selector", "status.phase=Running",
 			"-o", "jsonpath={.items[*].metadata.name}",
 		}
 		out, err := exec.Command("kubectl", args...).Output()
 		if err != nil || len(strings.TrimSpace(string(out))) == 0 {
 			args2 := []string{"-n", ns, "get", "pods",
-				"--selector", "app=" + deployment,
+				"--selector", selector,
 				"-o", "jsonpath={.items[*].metadata.name}",
 			}
 			out, err = exec.Command("kubectl", args2...).Output()
@@ -789,6 +793,32 @@ func fetchPods(ns, deployment string) tea.Cmd {
 		}
 		return podsReadyMsg{pods: strings.Fields(string(out))}
 	}
+}
+
+func deploymentSelector(ns, deployment string) (string, error) {
+	out, err := exec.Command("kubectl", "-n", ns, "get", "deployment", deployment,
+		"-o", "json").Output()
+	if err != nil {
+		return "", err
+	}
+	var d struct {
+		Spec struct {
+			Selector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"selector"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(out, &d); err != nil {
+		return "", err
+	}
+	if len(d.Spec.Selector.MatchLabels) == 0 {
+		return "app=" + deployment, nil
+	}
+	parts := make([]string, 0, len(d.Spec.Selector.MatchLabels))
+	for k, v := range d.Spec.Selector.MatchLabels {
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, ","), nil
 }
 
 func streamPodLogs(ctx context.Context, ns, pod, prefix string, ch chan<- logEntry) {
