@@ -129,6 +129,8 @@ const (
 	filterExclude
 )
 
+const maxLogEntries = 10_000
+
 // ─── messages ─────────────────────────────────────────────────────────────────
 
 type podsReadyMsg struct{ pods []string }
@@ -282,6 +284,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case logEntryMsg:
 		m.logEntries = append(m.logEntries, msg.entry)
+		if len(m.logEntries) > maxLogEntries {
+			m.logEntries = m.logEntries[len(m.logEntries)-maxLogEntries:]
+		}
 		m.refreshViewport()
 		return m, waitForLog(m.logCh)
 

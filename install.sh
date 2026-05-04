@@ -14,6 +14,7 @@ install_bin() {
   else
     sudo cp "$name" "$INSTALL_DIR/$name"
   fi
+  sudo codesign --force --sign - "$INSTALL_DIR/$name"
 }
 
 install_bin kubectl-log ./cmd/log/
