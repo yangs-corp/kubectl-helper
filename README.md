@@ -60,7 +60,8 @@ kubectl log -n <namespace> <deployment>
 
 | Key | Action |
 |-----|--------|
-| `↑ / ↓ / PgUp / PgDn` | Scroll |
+| `↑ / ↓` | Scroll 1 line |
+| `PgUp / PgDn` | Scroll 5 lines |
 | `/` | Include filter — show only matching lines |
 | `!` | Exclude filter — hide matching lines |
 | `0` | Clear filter |
@@ -72,7 +73,9 @@ kubectl log -n <namespace> <deployment>
 ### Features
 
 - **Real-time streaming** — tails all pods of a deployment simultaneously, color-coded per pod
-- **Include / exclude filter** — applied live to buffered log lines
+- **Include / exclude filter** — applied live to buffered log lines (`AND` / `OR` / `()` / `"phrase"` supported)
+  - Exclude if any keyword appears: `health OR openid OR token`
+  - Match only lines containing every term: `health AND openid AND token`
 - **Pod selector** — view logs from specific pods only
 - **Keyword highlighting**
   - Built-in: `fatal` / `panic` → red · `error` → orange-red · `warn` → orange · `debug` → gray

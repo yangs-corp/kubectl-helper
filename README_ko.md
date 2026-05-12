@@ -60,7 +60,8 @@ kubectl log -n <namespace> <deployment>
 
 | 키 | 동작 |
 |----|------|
-| `↑ / ↓ / PgUp / PgDn` | 스크롤 |
+| `↑ / ↓` | 1줄 스크롤 |
+| `PgUp / PgDn` | 5줄 스크롤 |
 | `/` | include 필터 — 일치하는 라인만 표시 |
 | `!` | exclude 필터 — 일치하는 라인 숨김 |
 | `0` | 필터 초기화 |
@@ -72,7 +73,9 @@ kubectl log -n <namespace> <deployment>
 ### 주요 기능
 
 - **실시간 스트리밍** — Deployment 소속 Pod 전체의 로그를 동시에 수신, Pod별 색상 구분
-- **Include / Exclude 필터** — 버퍼된 로그 라인에 즉시 적용
+- **Include / Exclude 필터** — 버퍼된 로그 라인에 즉시 적용 (`AND` / `OR` / `()` / `"phrase"` 지원)
+  - 여러 키워드 중 하나라도 제외: `health OR openid OR token`
+  - 같은 줄에 모두 포함된 경우만 매칭: `health AND openid AND token`
 - **Pod 선택기** — 특정 Pod의 로그만 선택해서 보기
 - **키워드 하이라이팅**
   - 기본 내장: `fatal` / `panic` → 빨강 · `error` → 주황-빨강 · `warn` → 주황 · `debug` → 회색

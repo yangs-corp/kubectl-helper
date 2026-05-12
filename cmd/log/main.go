@@ -51,10 +51,10 @@ type highlightRule struct {
 var defaultHighlights = []highlightRule{
 	{keyword: "fatal", style: lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)},
 	{keyword: "panic", style: lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)},
-	{keyword: "error", style: lipgloss.NewStyle().Foreground(lipgloss.Color("202"))},  // orange-red
-	{keyword: "warn",  style: lipgloss.NewStyle().Foreground(lipgloss.Color("214"))},  // orange
-	{keyword: "debug", style: lipgloss.NewStyle().Foreground(lipgloss.Color("244"))},  // gray
-	{keyword: "trace", style: lipgloss.NewStyle().Foreground(lipgloss.Color("240"))},  // darker gray
+	{keyword: "error", style: lipgloss.NewStyle().Foreground(lipgloss.Color("202"))}, // orange-red
+	{keyword: "warn", style: lipgloss.NewStyle().Foreground(lipgloss.Color("214"))},  // orange
+	{keyword: "debug", style: lipgloss.NewStyle().Foreground(lipgloss.Color("244"))}, // gray
+	{keyword: "trace", style: lipgloss.NewStyle().Foreground(lipgloss.Color("240"))}, // darker gray
 }
 
 var userHighlightStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true) // yellow
@@ -113,7 +113,7 @@ type logEntry struct {
 type appState int
 
 const (
-	stateTable      appState = iota
+	stateTable appState = iota
 	stateTableSearch
 	stateLogs
 	stateLogFilter
@@ -124,12 +124,17 @@ const (
 type filterMode int
 
 const (
-	filterNone    filterMode = iota
+	filterNone filterMode = iota
 	filterInclude
 	filterExclude
 )
 
 const maxLogEntries = 10_000
+
+const (
+	logLineScroll = 1
+	logPageScroll = logLineScroll * 5
+)
 
 // ─── messages ─────────────────────────────────────────────────────────────────
 
@@ -159,6 +164,7 @@ type model struct {
 	// log filter
 	filterMd    filterMode
 	filterText  string
+	filterErr   string
 	filterInput textinput.Model
 
 	// highlights
@@ -168,10 +174,10 @@ type model struct {
 	// pod picker
 	podCursor int
 
-	width         int
-	height        int
-	errText       string
-	exportNotice  string
+	width        int
+	height       int
+	errText      string
+	exportNotice string
 }
 
 func buildTableRows(deps []deployment) []table.Row {
@@ -268,7 +274,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			{Title: "AGE", Width: 6},
 		})
 		m.table.SetHeight(m.height - 3)
-		m.viewport = viewport.New(m.width, m.height-6)
+		m.resizeViewport()
+		if m.state == stateLogs || m.state == stateLogFilter || m.state == statePodPick || m.state == stateHighlightInput {
+			m.refreshViewport()
+		}
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -391,6 +400,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activePods = map[string]bool{}
 			m.filterText = ""
 			m.filterMd = filterNone
+			m.filterErr = ""
 			m.errText = ""
 			return m, nil
 		case "/":
@@ -410,6 +420,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "0":
 			m.filterMd = filterNone
 			m.filterText = ""
+			m.filterErr = ""
 			m.filterInput.SetValue("")
 			m.refreshViewport()
 			return m, nil
@@ -424,6 +435,24 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 		case "e":
 			return m, exportLogs(m.logEntries, m.selected, m.filterMd, m.filterText, m.activePods)
+		case "up", "k":
+			m.viewport.LineUp(logLineScroll)
+			return m, nil
+		case "down", "j":
+			m.viewport.LineDown(logLineScroll)
+			return m, nil
+		case "pgup":
+			m.viewport.LineUp(logPageScroll)
+			return m, nil
+		case "pgdown":
+			m.viewport.LineDown(logPageScroll)
+			return m, nil
+		case "home":
+			m.viewport.GotoTop()
+			return m, nil
+		case "end":
+			m.viewport.GotoBottom()
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -530,22 +559,53 @@ func (m model) allPodsSelected() bool {
 
 func (m model) renderEntry(e logEntry) string {
 	lower := strings.ToLower(e.raw)
+	bodyWidth := m.logBodyWidth(e.prefix)
 
 	// user highlights take priority
 	for _, kw := range m.userHighlights {
 		if strings.Contains(lower, kw) {
-			return e.prefix + userHighlightStyle.Render(e.raw)
+			return renderWrappedEntry(e.prefix, e.raw, userHighlightStyle, bodyWidth)
 		}
 	}
 
 	// default rules
 	for _, rule := range defaultHighlights {
 		if strings.Contains(lower, rule.keyword) {
-			return e.prefix + rule.style.Render(e.raw)
+			return renderWrappedEntry(e.prefix, e.raw, rule.style, bodyWidth)
 		}
 	}
 
-	return e.prefix + e.raw
+	return renderWrappedEntry(e.prefix, e.raw, lipgloss.NewStyle(), bodyWidth)
+}
+
+func (m model) logBodyWidth(prefix string) int {
+	width := m.viewport.Width
+	if width <= 0 {
+		width = m.width
+	}
+	bodyWidth := width - lipgloss.Width(prefix)
+	if bodyWidth < 8 {
+		bodyWidth = 8
+	}
+	return bodyWidth
+}
+
+func renderWrappedEntry(prefix, raw string, style lipgloss.Style, bodyWidth int) string {
+	if bodyWidth <= 0 {
+		return prefix + style.Render(raw)
+	}
+
+	body := style.Width(bodyWidth).Render(raw)
+	bodyLines := strings.Split(body, "\n")
+	indent := strings.Repeat(" ", lipgloss.Width(prefix))
+	for i, line := range bodyLines {
+		if i == 0 {
+			bodyLines[i] = prefix + line
+			continue
+		}
+		bodyLines[i] = indent + line
+	}
+	return strings.Join(bodyLines, "\n")
 }
 
 // ─── view ─────────────────────────────────────────────────────────────────────
@@ -594,7 +654,11 @@ func (m model) logView() string {
 	var help string
 	switch m.state {
 	case stateLogFilter:
-		help = helpStyle.Render("enter confirm · esc cancel")
+		if m.filterMd == filterExclude {
+			help = helpStyle.Render(`exclude any: A OR B · both: A AND B · enter confirm · esc cancel`)
+		} else {
+			help = helpStyle.Render(`include any: A OR B · both: A AND B · enter confirm · esc cancel`)
+		}
 	case statePodPick:
 		help = helpStyle.Render("↑/↓ move · space toggle · a all · enter/esc close")
 	case stateHighlightInput:
@@ -620,7 +684,11 @@ func (m model) logStatusBar() string {
 
 	switch m.state {
 	case stateLogFilter:
-		return " " + m.filterInput.View()
+		status := " " + m.filterInput.View()
+		if m.filterErr != "" {
+			status += "  " + filterExcludeStyle.Render("invalid: "+m.filterErr)
+		}
+		return status
 	case stateHighlightInput:
 		return " " + m.hlInput.View()
 	}
@@ -630,6 +698,9 @@ func (m model) logStatusBar() string {
 	}
 	if m.filterMd == filterExclude && m.filterText != "" {
 		parts = append(parts, filterExcludeStyle.Render("exclude:")+dimStyle.Render(m.filterText))
+	}
+	if m.filterErr != "" {
+		parts = append(parts, filterExcludeStyle.Render("invalid:")+dimStyle.Render(m.filterErr))
 	}
 	for _, kw := range m.userHighlights {
 		parts = append(parts, userHighlightStyle.Render("hl:")+dimStyle.Render(kw))
@@ -713,18 +784,26 @@ func (m *model) applyTableSearch() {
 }
 
 func (m *model) refreshViewport() {
+	wasAtBottom := m.viewport.AtBottom()
 	var sb strings.Builder
+	matcher, err := m.compileActiveLogMatcher()
+	if err != nil {
+		m.filterErr = err.Error()
+		matcher = func(string) bool { return true }
+	} else {
+		m.filterErr = ""
+	}
 	for _, e := range m.logEntries {
 		if len(m.activePods) > 0 && !m.activePods[e.pod] {
 			continue
 		}
 		switch m.filterMd {
 		case filterInclude:
-			if m.filterText != "" && !strings.Contains(e.raw, m.filterText) {
+			if m.filterText != "" && !matcher(e.raw) {
 				continue
 			}
 		case filterExclude:
-			if m.filterText != "" && strings.Contains(e.raw, m.filterText) {
+			if m.filterText != "" && matcher(e.raw) {
 				continue
 			}
 		}
@@ -732,7 +811,29 @@ func (m *model) refreshViewport() {
 		sb.WriteByte('\n')
 	}
 	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m model) compileActiveLogMatcher() (logMatcher, error) {
+	if m.filterMd == filterNone || strings.TrimSpace(m.filterText) == "" {
+		return func(string) bool { return true }, nil
+	}
+	return compileLogMatcher(m.filterText)
+}
+
+func (m *model) resizeViewport() {
+	height := m.height - 6
+	if height < 1 {
+		height = 1
+	}
+	if m.viewport.Width == 0 && m.viewport.Height == 0 {
+		m.viewport = viewport.New(m.width, height)
+		return
+	}
+	m.viewport.Width = m.width
+	m.viewport.Height = height
 }
 
 func (m *model) stopLogs() {
@@ -741,7 +842,10 @@ func (m *model) stopLogs() {
 		m.cancel = nil
 	}
 	if m.logCh != nil {
-		go func(ch chan logEntry) { for range ch {} }(m.logCh)
+		go func(ch chan logEntry) {
+			for range ch {
+			}
+		}(m.logCh)
 		m.logCh = nil
 	}
 }
@@ -754,8 +858,9 @@ func (m model) selectDeployment(d deployment) (model, tea.Cmd) {
 	m.errText = ""
 	m.filterMd = filterNone
 	m.filterText = ""
+	m.filterErr = ""
 	m.activePods = map[string]bool{}
-	m.viewport = viewport.New(m.width, m.height-6)
+	m.resizeViewport()
 	return m, fetchPods(d.namespace, d.name)
 }
 
@@ -853,6 +958,14 @@ func streamPodLogs(ctx context.Context, ns, pod, prefix string, ch chan<- logEnt
 
 func exportLogs(entries []logEntry, deploy deployment, fm filterMode, filterText string, activePods map[string]bool) tea.Cmd {
 	return func() tea.Msg {
+		matcher := logMatcher(func(string) bool { return true })
+		if fm != filterNone && strings.TrimSpace(filterText) != "" {
+			var err error
+			matcher, err = compileLogMatcher(filterText)
+			if err != nil {
+				matcher = func(string) bool { return true }
+			}
+		}
 		filename := fmt.Sprintf("kubectl-log-%s-%s.log", deploy.name, time.Now().Format("20060102-150405"))
 		f, err := os.Create(filename)
 		if err != nil {
@@ -866,11 +979,11 @@ func exportLogs(entries []logEntry, deploy deployment, fm filterMode, filterText
 			}
 			switch fm {
 			case filterInclude:
-				if filterText != "" && !strings.Contains(e.raw, filterText) {
+				if filterText != "" && !matcher(e.raw) {
 					continue
 				}
 			case filterExclude:
-				if filterText != "" && strings.Contains(e.raw, filterText) {
+				if filterText != "" && matcher(e.raw) {
 					continue
 				}
 			}
@@ -981,7 +1094,7 @@ Keys (deployment list):
   ↑/↓ navigate · / search · enter select · q quit
 
 Keys (log view):
-  ↑/↓/PgUp/PgDn scroll · / include · ! exclude · 0 clear
+  ↑/↓ scroll 1 line · PgUp/PgDn scroll 5 lines · / include · ! exclude · 0 clear
   p pod selector · h highlight · e export to file · b back · q quit
 `)
 			os.Exit(0)
